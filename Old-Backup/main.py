@@ -1,43 +1,31 @@
 import os
-import json
 import time
 import asyncio
 
 from LibreNMS_client import LibreNMSClient
 from SNMP_poller import get_mac_table_bridge_mib, snmp_walk, decode_mac_from_oid
-from storage import (
-    init_db, save_host, save_mib_mode, get_mib_mode,
-    save_fdb_entries, get_flaps, save_flap_events,
-    save_topology, get_topology, get_all_hosts,
-    get_all_flap_events, get_fdb_summary
-)
+from storage import init_db, save_host, save_vlan, save_fdb_entries, get_flaps, save_flap_events, save_mib_mode, get_mib_mode
 
 LIBRENMS_URL   = os.environ.get("LIBRENMS_URL",   "http://10.104.14.40")
 LIBRENMS_TOKEN = os.environ.get("LIBRENMS_TOKEN",  "e2ee4018904eedf72757aa0fb09ee5a0")
 DB_PATH        = os.environ.get("LIBRENMS_DB",     "LibreNMS_data.db")
 
-# "single" : test one switch  |  "network" : all LibreNMS devices | "setup" : one-time topology setup from API
-MODE           = "setup"
-TEST_IP        = "10.104.0.112"
-POLL_ROUNDS    = 10
-POLL_INTERVAL  = 30
-FLAP_MIN_MOVES = 2
+MODE          = "single"
+TEST_IP       = "10.104.0.112"
+POLL_ROUNDS   = 5
+POLL_INTERVAL = 5
+FLAP_MIN_MOVES = 2   # how many port moves = a confirmed flap
 
-COMMUNITY_MAP = {}  # populated automatically from LibreNMS at startup
+COMMUNITY_MAP = {}   # populated automatically from LibreNMS at startup
 
 SYSOID_TO_MIB = {
-    "1.3.6.1.4.1.11":    "bridge",        # HP/Aruba
-    "1.3.6.1.4.1.9":     "qbridge",       # Cisco
-    "1.3.6.1.4.1.45":    "qbridge",       # Nortel
-    "1.3.6.1.4.1.52642": "fiberstore",    # Fiberstore
-    "1.3.6.1.4.1.2636":  "qbridge",       # Juniper
-    "1.3.6.1.4.1.6027":  "bridge",        # Dell Force10
+    "1.3.6.1.4.1.11":    "bridge",          # HP/Aruba
+    "1.3.6.1.4.1.9":     "qbridge",         # Cisco
+    "1.3.6.1.4.1.45":    "qbridge",         # Nortel
+    "1.3.6.1.4.1.52642": "fiberstore",      # Fiberstore
+    "1.3.6.1.4.1.2636":  "qbridge",         # Juniper
+    "1.3.6.1.4.1.6027":  "bridge",          # Dell Force10
 }
-
-
-# ------------------------------------------------------------------ #
-#  MIB detection
-# ------------------------------------------------------------------ #
 
 def mib_from_sysoid(sysoid: str):
     if not sysoid:
@@ -52,6 +40,7 @@ def mib_from_sysoid(sysoid: str):
 async def detect_mib_mode(ip, community, vlans, client):
     print(f"  [{ip}] Detecting MIB mode...")
 
+    # Step 1: sysObjectID lookup via LibreNMS — no SNMP probing needed
     details = client.get_device_snmp_details(ip)
     if details:
         mode = mib_from_sysoid(details.get("sysObjectID", ""))
@@ -59,6 +48,7 @@ async def detect_mib_mode(ip, community, vlans, client):
             print(f"  [{ip}] Identified via sysObjectID -> {mode}")
             return mode
 
+    # Step 2: SNMP probing fallback
     results = await asyncio.gather(*[
         snmp_walk(ip, community, f"1.3.6.1.2.1.17.7.1.2.2.1.2.{v}") for v in vlans[:3]
     ])
@@ -74,15 +64,7 @@ async def detect_mib_mode(ip, community, vlans, client):
     return None
 
 
-# ------------------------------------------------------------------ #
-#  Device setup
-# ------------------------------------------------------------------ #
-
 async def fetch_device_info(client, conn, ip):
-    """
-    Fetch device info from LibreNMS, resolve community and MIB mode.
-    Returns (device_id, vlans, mib_mode) or (device_id, [], None) on failure.
-    """
     device = client.get_device(ip)
     if not device:
         print(f"  Could not fetch device info for {ip}, skipping.")
@@ -98,8 +80,10 @@ async def fetch_device_info(client, conn, ip):
         return device_id, [], None
 
     vlans = [v["vlan_vlan"] for v in vlans_raw if v.get("vlan_vlan")]
+    for v in vlans:
+        save_vlan(conn, v)
 
-    # Get community from LibreNMS, cache for session
+    # Get community from LibreNMS and cache it
     snmp_details = client.get_device_snmp_details(ip)
     community = (
         snmp_details.get("community")
@@ -108,7 +92,7 @@ async def fetch_device_info(client, conn, ip):
     )
     COMMUNITY_MAP[ip] = community
 
-    # Use cached MIB mode or detect and save
+    # Use cached MIB mode if available, otherwise detect and save
     mib_mode = get_mib_mode(conn, device_id)
     if mib_mode:
         print(f"  [{ip}] Using cached MIB mode: {mib_mode}")
@@ -124,32 +108,6 @@ async def fetch_device_info(client, conn, ip):
     print(f"  {system_name} ({ip}) — {len(vlans)} VLANs — mode: {mib_mode}")
     return device_id, vlans, mib_mode
 
-
-# ------------------------------------------------------------------ #
-#  Topology
-# ------------------------------------------------------------------ #
-
-def fetch_topology(client, conn, device_map):
-    """
-    Fetch LLDP links from LibreNMS for all polled devices and store them.
-    Runs once after device setup, before polling starts.
-    """
-    # Build ip -> hostid map for link resolution
-    host_ip_map = {ip: device_id for ip, (device_id, _, _) in device_map.items()}
-
-    print("\nFetching topology (LLDP links)...")
-    for ip, (device_id, _, _) in device_map.items():
-        links = client.get_device_links(ip)
-        if links:
-            save_topology(conn, device_id, links, host_ip_map)
-            print(f"  [{ip}] {len(links)} LLDP link(s) saved")
-        else:
-            print(f"  [{ip}] No LLDP links found")
-
-
-# ------------------------------------------------------------------ #
-#  Q-BRIDGE concurrent VLAN walk
-# ------------------------------------------------------------------ #
 
 async def get_mac_table_qbridge_all_vlans(ip, community, vlans):
     """Fetch bridge/interface tables once, then walk all VLANs concurrently."""
@@ -210,10 +168,6 @@ async def get_mac_table_qbridge_all_vlans(ip, community, vlans):
     return all_entries
 
 
-# ------------------------------------------------------------------ #
-#  Poll one device
-# ------------------------------------------------------------------ #
-
 async def poll_device(conn, ip, vlans, device_id, mib_mode):
     community = COMMUNITY_MAP.get(ip, "public")
     timestamp = time.time()
@@ -240,94 +194,16 @@ async def poll_device(conn, ip, vlans, device_id, mib_mode):
     else:
         print(f"  [{ip}] No flaps detected.")
 
-
-# ------------------------------------------------------------------ #
-#  Topology setup from LibreNMS
-# ------------------------------------------------------------------ #
-
-async def setup_from_librenms(client, conn):
-    print("Setting up DB from LibreNMS API...")
-    devices = client.list_devices()
-    if not devices:
-        print("No devices found.")
-        return {}
-
-    device_map = {}
-    for dev in devices:
-        ip          = dev.get("ip") or dev.get("hostname")
-        device_id   = str(dev.get("device_id"))
-        system_name = dev.get("sysName") or dev.get("hostname")
-        save_host(conn, device_id, system_name, ip, dev.get("os"), dev.get("hardware"))
-
-        snmp_details = client.get_device_snmp_details(ip)
-        if snmp_details and snmp_details.get("community"):
-            COMMUNITY_MAP[ip] = snmp_details.get("community")
-
-        vlans_raw = client.get_device_vlans(ip) or []
-        vlans = [v["vlan_vlan"] for v in vlans_raw if v.get("vlan_vlan")]
-        device_map[ip] = (device_id, vlans, None)
-        print(f"  {system_name} ({ip}) — {len(vlans)} VLANs")
-
-    # Fetch topology per device — no IP resolution needed now
-    print("\nFetching LLDP topology...")
-    for ip, (device_id, _, _) in device_map.items():
-        links = client.get_device_links(ip)
-        if links:
-            save_topology(conn, device_id, links)
-            print(f"  [{ip}] {len(links)} link(s)")
-
-    return device_map
-
-
-# ------------------------------------------------------------------ #
-#  JSON export for frontend
-# ------------------------------------------------------------------ #
-
-def export_json(conn, path="data.json"):
-    """
-    Export everything the frontend needs into a single JSON file.
-    Call this after polling is complete.
-    """
-    hosts       = get_all_hosts(conn)
-    topology    = get_topology(conn)
-    flap_events = get_all_flap_events(conn)
-
-    # FDB summary per host (MAC count per VLAN, latest round)
-    fdb_summaries = {}
-    for host in hosts:
-        fdb_summaries[host["hostid"]] = get_fdb_summary(conn, host["hostid"])
-
-    data = {
-        "generated_at": time.time(),
-        "hosts":         hosts,
-        "topology":      topology,
-        "flap_events":   flap_events,
-        "fdb_summaries": fdb_summaries,
-    }
-
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-
-    print(f"\nExported frontend data to {path}")
-
-
-# ------------------------------------------------------------------ #
-#  Main
-# ------------------------------------------------------------------ #
-
 async def main():
+    if not LIBRENMS_TOKEN:
+        print("LIBRENMS_TOKEN not set; exiting.")
+        return
+
     client = LibreNMSClient(LIBRENMS_URL, token=LIBRENMS_TOKEN)
     conn   = init_db(DB_PATH)
     device_map = {}
 
-    if MODE == "setup":
-        # ---- One-time setup: LibreNMS API only, no SNMP ----
-        device_map = await setup_from_librenms(client, conn)
-        export_json(conn, path="data.json")
-        print("Setup complete. Switch to 'single' or 'network' mode to start polling.")
-        return
-
-    elif MODE == "single":
+    if MODE == "single":
         print(f"Mode: SINGLE — testing {TEST_IP}\n")
         device_id, vlans, mib_mode = await fetch_device_info(client, conn, TEST_IP)
         if device_id and vlans:
@@ -337,7 +213,7 @@ async def main():
         print("Mode: NETWORK — polling all LibreNMS devices\n")
         devices = client.list_devices()
         if not devices:
-            print("No devices found.")
+            print("No devices found (or API error).")
             return
         for dev in devices:
             ip = dev.get("ip") or dev.get("hostname")
@@ -351,7 +227,6 @@ async def main():
         print("No devices to poll, exiting.")
         return
 
-    # ---- Polling loop: SNMP only, no topology fetching ----
     print(f"\nPolling {len(device_map)} device(s) — {POLL_ROUNDS} rounds every {POLL_INTERVAL}s\n")
 
     for i in range(POLL_ROUNDS):
@@ -366,9 +241,8 @@ async def main():
 
     print("\n=== Run Complete ===")
     print(f"Devices polled : {len(device_map)}")
+    print(f"Total rounds   : {POLL_ROUNDS}")
     print(f"FDB entries    : {conn.execute('SELECT COUNT(*) FROM fdb').fetchone()[0]}")
     print(f"Flap events    : {conn.execute('SELECT COUNT(*) FROM flap_events').fetchone()[0]}")
-    export_json(conn, path="data.json")
-
 
 asyncio.run(main())
