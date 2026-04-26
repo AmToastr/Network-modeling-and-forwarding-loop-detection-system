@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Modeling and Forwarding Loop Detection System</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="../static/style.css">
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar px-3 py-2">
+  <span class="navbar-brand">Network Modeling and Forwarding Loop Detection System</span>
+  <div class="d-flex align-items-center gap-2">
+
+    <!-- Step 4 — configurable poll settings -->
+    <label class="poll-label">Rounds</label>
+    <input id="rounds-input"   class="poll-input" type="number" min="1"  max="100"  value="5"  title="Number of poll rounds">
+    <label class="poll-label">Interval (s)</label>
+    <input id="interval-input" class="poll-input" type="number" min="5"  max="3600" value="10" title="Seconds between rounds">
+
+    <div class="navbar-divider"></div>
+
+    <button class="btn-mode btn-setup"   onclick="runMode('setup')">Setup Topology</button>
+    <input  id="ip-input" type="text" placeholder="Switch IP…">
+    <button class="btn-mode btn-single"  onclick="runMode('single')">Single Mode</button>
+    <button class="btn-mode btn-network" onclick="runMode('network')">Network Mode</button>
+  </div>
+</nav>
+
+<!-- Main -->
+<div class="main-layout">
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="sidebar-header">
+      Switches
+      <span class="switch-count" id="sw-count">0</span>
+    </div>
+    <div id="switch-list"></div>
+  </div>
+
+  <!-- Right panel -->
+  <div class="right-panel">
+
+    <!-- Graph -->
+    <div id="graph-wrap">
+      <div id="cy"></div>
+
+      <div id="graph-empty">Run <strong>&nbsp;Setup Topology&nbsp;</strong> to load the network</div>
+
+      <div class="graph-controls">
+        <button class="graph-btn" onclick="cy && cy.fit()">Fit</button>
+        <button class="graph-btn" onclick="resetLayout()">Reset</button>
+        <button class="graph-btn" onclick="focusFlaps()">Show Flaps</button>
+        <button class="graph-btn btn-clear-all" onclick="clearFlaps(null)">Clear All Flaps</button>
+      </div>
+
+      <div class="legend">
+        <div class="legend-row"><div class="legend-dot" style="background:#f0c040"></div> Core</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#4a90d9"></div> Nortel/BOSS</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#9b7fd4"></div> HP/Comware</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#d97a4a"></div> Dell</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#4ad97a"></div> Fiberstore</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#d94a7a"></div> Huawei</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#d94a4a"></div> ⚠ Flaps</div>
+      </div>
+    </div>
+
+    <!-- Step 4 — round progress bar (hidden until polling starts) -->
+    <div id="round-progress-wrap">
+      <div id="round-progress-bar"></div>
+      <span id="round-progress-label"></span>
+    </div>
+
+    <!-- Console -->
+    <div id="console-wrap">
+      <div class="console-header">
+        Console
+        <div>
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text" style="font-size:11px;color:#666">Idle</span>
+        </div>
+      </div>
+      <div id="console"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Node info modal (draggable) -->
+<div id="node-modal">
+  <div id="modal-header">
+    <span id="modal-title">—</span>
+    <span id="modal-close" onclick="closeNodeModal()">✕</span>
+  </div>
+  <div id="modal-body"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<script src="../static/app.js"></script>
+</body>
+</html>
