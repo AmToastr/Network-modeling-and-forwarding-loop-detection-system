@@ -148,8 +148,7 @@ async def get_mac_table_bridge_mib(ip, community="public"):
         except (ValueError, TypeError):
             continue
 
-    log.debug("[%s] BRIDGE-MIB: %d MACs, %d VLANs mapped",
-              ip, len(results), len(mac_to_vlan))
+    log.debug("[%s] BRIDGE-MIB: %d MACs, %d VLANs mapped", ip, len(results), len(mac_to_vlan))
     return results
 
 

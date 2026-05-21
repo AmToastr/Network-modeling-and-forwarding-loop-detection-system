@@ -46,7 +46,7 @@ DB_PATH         = os.environ.get("LIBRENMS_DB",    "LibreNMS_data.db")
 
 POLL_ROUNDS     = 5
 POLL_INTERVAL   = 10   # seconds between rounds
-FDB_KEEP_ROUNDS = 20   # rounds of FDB history retained per device
+FDB_KEEP_ROUNDS = POLL_ROUNDS   # rounds of FDB history retained per device
 FLAP_MIN_MOVES  = 2
 
 # sysObjectID prefix -> MIB polling mode
@@ -155,7 +155,6 @@ async def _detect_mib_mode(ip, community, vlans, client):
 async def fetch_device_info(client, conn, ip):
     """
     Fetch device metadata from LibreNMS, resolve SNMP community and MIB mode.
-    Returns (device_id, vlans, mib_mode) or (None, [], None) on failure.
     """
     device = client.get_device(ip)
     if not device:

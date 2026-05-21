@@ -184,8 +184,9 @@ function buildGraph() {
     }
   });
 
-  cy.on('tap', 'node', e => showNodeModal(e.target.data()));
-  cy.on('tap', e         => { if (e.target === cy) closeNodeModal(); });
+  cy.on('tap', 'node', e => { closeEdgePopup(); showNodeModal(e.target.data()); });
+  cy.on('tap', 'edge', e => { closeNodeModal(); showEdgePopup(e.target.data(), e.renderedPosition); });
+  cy.on('tap', e => { if (e.target === cy) { closeNodeModal(); closeEdgePopup(); } });
 }
 
 // ── Node modal ───────────────────────────────────────────────────────
@@ -241,6 +242,47 @@ function closeNodeModal() {
   document.getElementById('node-modal').classList.remove('visible');
 }
 
+// ── Edge popup ────────────────────────────────────────────────────────
+function showEdgePopup(d, pos) {
+  const src  = appData.hosts.find(h => h.hostid === d.source);
+  const tgt  = appData.hosts.find(h => h.hostid === d.target);
+  if (!src || !tgt) return;
+
+  const lport = d.lport || '—';
+  const rport = d.rport || '—';
+
+  const popup = document.getElementById('edge-popup');
+  popup.innerHTML = `
+    <div class="edge-popup-row">
+      <span class="edge-popup-host">${src.hostname}</span>
+      <span class="edge-popup-ip">${src.ip_address}</span>
+      <span class="edge-popup-port">${lport}</span>
+    </div>
+    <div class="edge-popup-divider">⟷</div>
+    <div class="edge-popup-row">
+      <span class="edge-popup-host">${tgt.hostname}</span>
+      <span class="edge-popup-ip">${tgt.ip_address}</span>
+      <span class="edge-popup-port">${rport}</span>
+    </div>`;
+
+  // Position near the tap point, clamped inside the graph container
+  const wrap  = document.getElementById('graph-wrap');
+  const wRect = wrap.getBoundingClientRect();
+  const popupW = 260, popupH = 90;
+  let left = pos.x + 12;
+  let top  = pos.y + 12;
+  if (left + popupW > wRect.width)  left = pos.x - popupW - 8;
+  if (top  + popupH > wRect.height) top  = pos.y - popupH - 8;
+
+  popup.style.left    = left + 'px';
+  popup.style.top     = top  + 'px';
+  popup.style.display = 'block';
+}
+
+function closeEdgePopup() {
+  document.getElementById('edge-popup').style.display = 'none';
+}
+
 function selectHost(id) {
   if (!cy) return;
   const n = cy.getElementById(id);
@@ -284,12 +326,6 @@ function selectHost(id) {
 function resetLayout() {
   if (!cy) return;
   cy.layout({ name: 'cose', nodeRepulsion: 400000, idealEdgeLength: 100, padding: 40 }).run();
-}
-
-function focusFlaps() {
-  if (!cy || !flapSet.size) { addLog('No flap events in current data.', 'warn'); return; }
-  const flapNodes = cy.nodes().filter(n => flapSet.has(n.id()));
-  cy.animate({ fit: { eles: flapNodes, padding: 80 }, duration: 500 });
 }
 
 async function clearFlaps(hostid) {

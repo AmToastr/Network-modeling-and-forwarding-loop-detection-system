@@ -50,11 +50,12 @@
 
       <div id="graph-empty">Run <strong>&nbsp;Setup Topology&nbsp;</strong> to load the network</div>
 
+      <!-- Edge link popup -->
+      <div id="edge-popup"></div>
+
       <div class="graph-controls">
-        <button class="graph-btn" onclick="cy && cy.fit()">Fit</button>
-        <button class="graph-btn" onclick="resetLayout()">Reset</button>
-        <button class="graph-btn" onclick="focusFlaps()">Show Flaps</button>
         <button class="graph-btn btn-clear-all" onclick="clearFlaps(null)">Clear All Flaps</button>
+        <button class="graph-btn" onclick="resetLayout()">Reset Layout</button>
       </div>
 
       <div class="legend">
